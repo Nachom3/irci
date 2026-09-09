@@ -8,7 +8,7 @@ The supplied emulator implements the original STX4 instruction encoding. The
 supplied `rtm32.asm-1.2.0` assembler uses a newer encoding for several
 mnemonics, including `addi` and `trap`. Therefore:
 
-1. `snake.stx4` is written in a readable STX4-like assembly dialect.
+1. `snake.rmt` is written in a readable STX4-like assembly dialect.
 2. `tools/build_snake.py` encodes the instructions with the original STX4
    bit layout.
 3. The official assembler is used only to package numeric `.word` directives

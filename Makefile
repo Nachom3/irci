@@ -8,9 +8,9 @@ all: build
 
 build: $(SNAKE_IMAGE)
 
-$(SNAKE_IMAGE): snake.stx4 tools/build_snake.py rtm32.asm-1.2.0/x86_64-linux-musl-rtm32.asm
+$(SNAKE_IMAGE): snake.rmt tools/build_snake.py rtm32.asm-1.2.0/x86_64-linux-musl-rtm32.asm
 	@mkdir -p $(BUILD_DIR)
-	"$(PYTHON)" tools/build_snake.py --source snake.stx4 --output "$@" --assembler rtm32.asm-1.2.0/x86_64-linux-musl-rtm32.asm
+	"$(PYTHON)" tools/build_snake.py --source snake.rmt --output "$@" --assembler rtm32.asm-1.2.0/x86_64-linux-musl-rtm32.asm
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
