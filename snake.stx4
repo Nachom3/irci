@@ -1,0 +1,327 @@
+// RTM32 Snake for the original STX4 emulator.
+//
+// The supplied emulator exposes a UART at:
+//   0xFFFFFF00 - data (read one key / write one character)
+//   0xFFFFFF04 - status (bit 0 means a key is ready)
+// The build script translates these mnemonics to the original STX4 words
+// before invoking the supplied rtm32.asm packager.
+
+.section ".text"
+start:
+    // UART addresses and a small stack.
+    addi $gp, $zero, -0x100       // 0xFFFFFF00
+    addi $fp, $zero, -0xFC        // 0xFFFFFF04
+    addi $sp, $zero, 0xFFC
+
+    la $s0, snake_cells            // snake cells, one word per segment
+    la $s1, board                  // 20 x 10 character board
+    addi $s2, $zero, 5             // length
+    addi $s3, $zero, 0             // direction: 0 right, 1 down, 2 left, 3 up
+    addi $s4, $zero, 137           // food cell
+    addi $s5, $zero, 73            // deterministic food sequence state
+    addi $s6, $zero, 10            // head x
+    addi $s7, $zero, 5             // head y
+
+    // Initial body: the head is at cell 110 and points right.
+    addi $t0, $zero, 110
+    sw $t0, 0($s0)
+    addi $t0, $zero, 109
+    sw $t0, 4($s0)
+    addi $t0, $zero, 108
+    sw $t0, 8($s0)
+    addi $t0, $zero, 107
+    sw $t0, 12($s0)
+    addi $t0, $zero, 106
+    sw $t0, 16($s0)
+
+    jal render
+
+main_loop:
+    jal delay
+    jal poll_input
+
+    addi $t0, $zero, 'q'
+    beq $v0, $t0, quit
+    addi $t0, $zero, 'w'
+    beq $v0, $t0, input_up
+    addi $t0, $zero, 'a'
+    beq $v0, $t0, input_left
+    addi $t0, $zero, 's'
+    beq $v0, $t0, input_down
+    addi $t0, $zero, 'd'
+    beq $v0, $t0, input_right
+    j input_done
+
+input_up:
+    addi $t1, $zero, 1
+    beq $s3, $t1, input_done       // do not reverse into the body
+    addi $s3, $zero, 3
+    j input_done
+input_left:
+    addi $t1, $zero, 0
+    beq $s3, $t1, input_done
+    addi $s3, $zero, 2
+    j input_done
+input_down:
+    addi $t1, $zero, 3
+    beq $s3, $t1, input_done
+    addi $s3, $zero, 1
+    j input_done
+input_right:
+    addi $t1, $zero, 2
+    beq $s3, $t1, input_done
+    addi $s3, $zero, 0
+input_done:
+
+    // Move the head while checking the rectangular wall boundaries.
+    beq $s3, $zero, move_right
+    addi $t0, $zero, 1
+    beq $s3, $t0, move_down
+    addi $t0, $zero, 2
+    beq $s3, $t0, move_left
+    j move_up
+
+move_right:
+    addi $s6, $s6, 1
+    addi $t0, $zero, 20
+    slt $t1, $s6, $t0
+    beq $t1, $zero, game_over
+    j make_new_cell
+move_down:
+    addi $s7, $s7, 1
+    addi $t0, $zero, 10
+    slt $t1, $s7, $t0
+    beq $t1, $zero, game_over
+    j make_new_cell
+move_left:
+    beq $s6, $zero, game_over
+    addi $s6, $s6, -1
+    j make_new_cell
+move_up:
+    beq $s7, $zero, game_over
+    addi $s7, $s7, -1
+
+make_new_cell:
+    // cell = y * 20 + x (20 = 16 + 4).
+    sll $t0, $s7, 4
+    sll $t1, $s7, 2
+    add $t0, $t0, $t1
+    add $t0, $t0, $s6
+    addi $v1, $t0, 0
+
+    // Self collision check against the old body.
+    addi $t1, $zero, 0
+self_scan:
+    beq $t1, $s2, self_clear
+    sll $t2, $t1, 2
+    add $t3, $s0, $t2
+    lw $t4, 0($t3)
+    beq $t4, $v1, game_over
+    addi $t1, $t1, 1
+    j self_scan
+self_clear:
+
+    // Keep an eat flag while shifting the body toward the tail.
+    beq $v1, $s4, ate_food
+    addi $a3, $zero, 0
+    j shift_body
+ate_food:
+    addi $a3, $zero, 1
+
+shift_body:
+    addi $t0, $s2, -1
+shift_loop:
+    beq $t0, $zero, store_head
+    sll $t1, $t0, 2
+    add $t2, $s0, $t1
+    addi $t3, $t0, -1
+    sll $t3, $t3, 2
+    add $t4, $s0, $t3
+    lw $t5, 0($t4)
+    sw $t5, 0($t2)
+    addi $t0, $t0, -1
+    j shift_loop
+
+store_head:
+    sw $v1, 0($s0)
+    beq $a3, $zero, after_move
+    addi $s2, $s2, 1
+    addi $t0, $zero, 64
+    beq $s2, $t0, game_over
+    jal spawn_food
+
+after_move:
+    jal render
+    j main_loop
+
+// Poll one byte from the UART without blocking.
+poll_input:
+    lbu $t0, 0($fp)
+    andi $t1, $t0, 1
+    beq $t1, $zero, poll_none
+    lbu $v0, 0($gp)
+    jr $at
+poll_none:
+    addi $v0, $zero, 0
+    jr $at
+
+// Software pacing. It is deliberately simple because the supplied machine
+// image has no documented timer peripheral.
+delay:
+    addi $t0, $zero, 26000
+delay_loop:
+    addi $t0, $t0, -1
+    bne $t0, $zero, delay_loop
+    jr $at
+
+// Pick the next free cell using a deterministic sequence. This avoids relying
+// on an undocumented timer or random-device peripheral.
+spawn_food:
+    addi $s5, $s5, 37
+    addi $t0, $s5, 0
+    addi $t1, $zero, 200
+    slt $t2, $t0, $t1
+    bne $t2, $zero, food_scan_start
+    addi $t0, $t0, -200
+food_scan_start:
+    addi $t3, $zero, 0
+food_scan:
+    slt $t4, $t3, $s2
+    beq $t4, $zero, food_store
+    sll $t5, $t3, 2
+    add $t6, $s0, $t5
+    lw $t7, 0($t6)
+    beq $t7, $t0, food_bump
+    addi $t3, $t3, 1
+    j food_scan
+food_bump:
+    addi $t0, $t0, 1
+    addi $t1, $zero, 200
+    slt $t2, $t0, $t1
+    bne $t2, $zero, food_scan_restart
+    addi $t0, $t0, -200
+food_scan_restart:
+    addi $t3, $zero, 0
+    j food_scan
+food_store:
+    addi $s4, $t0, 0
+    jr $at
+
+// Render the complete board using ANSI terminal control sequences.
+render:
+    addi $sp, $sp, -4
+    sw $at, 0($sp)
+    la $a0, clear_screen
+    jal print_string
+    la $a0, title
+    jal print_string
+    la $a0, top_border
+    jal print_string
+
+    // Fill the board with spaces.
+    la $t0, board
+    addi $t1, $zero, 0
+    addi $t2, $zero, 200
+    addi $t3, $zero, ' '
+render_clear:
+    beq $t1, $t2, render_mark_snake
+    add $t4, $t0, $t1
+    sb $t3, 0($t4)
+    addi $t1, $t1, 1
+    j render_clear
+
+render_mark_snake:
+    addi $t1, $zero, 0
+render_snake_loop:
+    beq $t1, $s2, render_mark_food
+    sll $t2, $t1, 2
+    add $t3, $s0, $t2
+    lw $t4, 0($t3)
+    add $t5, $s1, $t4
+    addi $t6, $zero, 'o'
+    bne $t1, $zero, render_body_char
+    addi $t6, $zero, '@'
+render_body_char:
+    sb $t6, 0($t5)
+    addi $t1, $t1, 1
+    j render_snake_loop
+
+render_mark_food:
+    add $t0, $s1, $s4
+    addi $t1, $zero, '*'
+    sb $t1, 0($t0)
+
+    // Print ten rows, each enclosed by vertical walls.
+    addi $t0, $zero, 0
+render_row:
+    addi $a0, $zero, '|'
+    jal print_char
+    addi $t1, $zero, 0
+render_column:
+    addi $t2, $zero, 20
+    beq $t1, $t2, render_row_end
+    sll $t3, $t0, 4
+    sll $t4, $t0, 2
+    add $t3, $t3, $t4
+    add $t3, $t3, $t1
+    add $t4, $s1, $t3
+    lbu $a0, 0($t4)
+    jal print_char
+    addi $t1, $t1, 1
+    j render_column
+render_row_end:
+    addi $a0, $zero, '|'
+    jal print_char
+    addi $a0, $zero, '\r'
+    jal print_char
+    addi $a0, $zero, '\n'
+    jal print_char
+    addi $t0, $t0, 1
+    addi $t2, $zero, 10
+    bne $t0, $t2, render_row
+
+    la $a0, bottom_border
+    jal print_string
+    la $a0, controls
+    jal print_string
+    lw $at, 0($sp)
+    addi $sp, $sp, 4
+    jr $at
+
+print_string:
+    lbu $t0, 0($a0)
+    beq $t0, $zero, print_string_done
+    sb $t0, 0($gp)
+    addi $a0, $a0, 1
+    j print_string
+print_string_done:
+    jr $at
+
+print_char:
+    sb $a0, 0($gp)
+    jr $at
+
+quit:
+    la $a0, goodbye
+    jal print_string
+quit_loop:
+    j quit_loop
+
+game_over:
+    jal render
+    la $a0, game_over_message
+    jal print_string
+game_over_loop:
+    j game_over_loop
+
+.section ".data"
+clear_screen: .asciiz "\x1b[2J\x1b[H"
+title: .asciiz "RTM32 SNAKE - old STX4\r\n"
+top_border: .asciiz "+--------------------+\r\n"
+bottom_border: .asciiz "+--------------------+\r\n"
+controls: .asciiz "WASD move  Q quit  @ head  o body  * food\r\n"
+goodbye: .asciiz "Snake stopped.\r\n"
+game_over_message: .asciiz "Game over!\r\n"
+.pad 3
+snake_cells: .pad 256
+board: .pad 200

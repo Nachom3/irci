@@ -1,0 +1,6 @@
+# Local Pi runtime state
+.atl/
+
+# Generated build and Python cache files
+build/
+__pycache__/
