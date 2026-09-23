@@ -5,7 +5,7 @@ A text-mode Snake game for the supplied RTM32-0.5 emulator.
 ## Important compatibility note
 
 The supplied emulator implements the original STX4 instruction encoding. The
-supplied `rtm32.asm-1.2.0` assembler uses a newer encoding for several
+supplied `rtm32.asm-1.2.1` assembler uses a newer encoding for several
 mnemonics, including `addi` and `trap`. Therefore:
 
 1. `snake.rmt` is written in a readable STX4-like assembly dialect.

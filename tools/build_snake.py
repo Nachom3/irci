@@ -2,7 +2,7 @@
 """Build the RTM32 Snake program with the old STX4 instruction encoding.
 
 The supplied RTM32-0.5 emulator implements the original STX4 encoding, while
-rtm32.asm 1.2.0 emits a newer instruction encoding for several mnemonics.  This
+rtm32.asm 1.2.1 emits a newer instruction encoding for several mnemonics.  This
 module therefore assembles the small source language used by ``snake.rmt``
 into numeric ``.word`` directives and delegates only the final MDBG packaging
 to the official assembler.
@@ -148,11 +148,7 @@ def encode_l(opcode: int, rs: int, rt: int, imm: int, high: bool = False) -> int
     if not 0 <= imm <= 0xFFFF:
         raise ValueError(f"logical immediate={imm} does not fit 16 bits")
     return (
-        (opcode << 27)
-        | (rs << 22)
-        | (rt << 17)
-        | ((1 if high else 0) << 16)
-        | imm
+        (opcode << 27) | (rs << 22) | (rt << 17) | ((1 if high else 0) << 16) | imm
     ) & 0xFFFFFFFF
 
 
@@ -713,7 +709,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--assembler",
         type=Path,
-        default=root / "rtm32.asm-1.2.0" / "x86_64-linux-musl-rtm32.asm",
+        default=root / "rtm32.asm-1.2.1" / "x86_64-linux-musl-rtm32.asm",
     )
     parser.add_argument(
         "--generated",

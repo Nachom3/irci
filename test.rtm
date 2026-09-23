@@ -1,0 +1,193 @@
+// Problema complicado para entrega - Bubble sort con impresion decimal.
+// Arquitectura RTM32, assembler rtm32.asm 1.2.1 directo.
+// Enunciado: ordenar 10 enteros con signo en memoria e imprimir antes/despues.
+// Testea: lw/sw, lbu/sb, add/sub/slt, sll, div/rest, addi, beq, j/jal/jr,
+//   orh/ori con .hi16/.lo16, stack, llamadas anidadas y E/S por UART.
+// Consola UART: 0xFFFFFF00 = datos (-0x100 desde $zero).
+// Fin con trap 1 (Core Exception 6 en el debugger, como en hola_mundo).
+// NOTA 1.2.1: el assembler no acepta los alias $v0/$v1/$t6-$t9 (solo $14-$19
+// numericos). Este programa usa unicamente $t0-$t5, $sX, $aX para evitarlo.
+
+.section ".text"
+start:
+    addi $sp, $zero, 0xFFC
+
+    // Imprime "Antes:".
+    orh $a0, $zero, .hi16 msg_antes
+    ori $a0, $a0, .lo16 msg_antes
+    jal imprimir_asciiz
+
+    // Imprime el arreglo desordenado.
+    orh $a0, $zero, .hi16 arreglo
+    ori $a0, $a0, .lo16 arreglo
+    addi $a1, $zero, 10
+    jal imprime_arreglo
+
+    // Ordena con bubble sort.
+    orh $a0, $zero, .hi16 arreglo
+    ori $a0, $a0, .lo16 arreglo
+    addi $a1, $zero, 10
+    jal ordena_burbuja
+
+    // Imprime "Despues:".
+    orh $a0, $zero, .hi16 msg_despues
+    ori $a0, $a0, .lo16 msg_despues
+    jal imprimir_asciiz
+
+    // Imprime el arreglo ordenado.
+    orh $a0, $zero, .hi16 arreglo
+    ori $a0, $a0, .lo16 arreglo
+    addi $a1, $zero, 10
+    jal imprime_arreglo
+
+    orh $a0, $zero, .hi16 msg_fin
+    ori $a0, $a0, .lo16 msg_fin
+    jal imprimir_asciiz
+
+    trap 1
+
+// imprimir_asciiz($a0 = puntero a string NUL-terminada).
+// Hoja: usa solo $t0-$t2, no necesita stack.
+imprimir_asciiz:
+    addi $t0, $a0, 0
+    addi $t1, $zero, -0x100
+imprimir_asciiz.bucle:
+    lbu $t2, 0($t0)
+    beq $t2, $zero, imprimir_asciiz.fin
+    sb $t2, 0($t1)
+    addi $t0, $t0, 1
+    j imprimir_asciiz.bucle
+imprimir_asciiz.fin:
+    jr $ra, 0
+
+// imprimir_caracter($a0 = byte a transmitir).
+imprimir_caracter:
+    addi $t0, $zero, -0x100
+    sb $a0, 0($t0)
+    jr $ra, 0
+
+// imprimir_entero($a0 = entero con signo, decimal).
+// Hoja: escribe directo a UART. Usa $a1 como divisor (libre: solo $a0 es arg).
+// Reserva 40 bytes en stack para hasta 10 digitos.
+imprimir_entero:
+    addi $t2, $zero, -0x100
+    beq $a0, $zero, imprimir_entero.cero
+    slt $t0, $a0, $zero
+    beq $t0, $zero, imprimir_entero.positivo
+    // Negativo: imprime '-' y niega el valor.
+    addi $t4, $zero, '-'
+    sb $t4, 0($t2)
+    sub $a0, $zero, $a0
+imprimir_entero.positivo:
+    addi $sp, $sp, -40
+    addi $t1, $zero, 0
+    addi $a1, $zero, 10
+imprimir_entero.bucle_div:
+    beq $a0, $zero, imprimir_entero.imprime
+    div $t3, $a0, $a1
+    rest $t4, $a0, $a1
+    addi $t4, $t4, '0'
+    sll $t5, $t1, 2
+    add $t5, $sp, $t5
+    sw $t4, 0($t5)
+    addi $t1, $t1, 1
+    add $a0, $t3, $zero
+    j imprimir_entero.bucle_div
+imprimir_entero.imprime:
+    beq $t1, $zero, imprimir_entero.fin
+    addi $t1, $t1, -1
+    sll $t5, $t1, 2
+    add $t5, $sp, $t5
+    lw $t4, 0($t5)
+    sb $t4, 0($t2)
+    j imprimir_entero.imprime
+imprimir_entero.fin:
+    addi $sp, $sp, 40
+    jr $ra, 0
+imprimir_entero.cero:
+    addi $t4, $zero, '0'
+    sb $t4, 0($t2)
+    jr $ra, 0
+
+// imprime_arreglo($a0 = puntero, $a1 = largo).
+// No hoja: llama a imprimir_entero/imprimir_caracter/imprimir_asciiz.
+// Guarda $ra y $s0-$s2 (callee-saved).
+imprime_arreglo:
+    addi $sp, $sp, -16
+    sw $ra, 0($sp)
+    sw $s0, 4($sp)
+    sw $s1, 8($sp)
+    sw $s2, 12($sp)
+    add $s0, $a0, $zero
+    add $s1, $a1, $zero
+    addi $s2, $zero, 0
+imprime_arreglo.bucle:
+    beq $s2, $s1, imprime_arreglo.fin
+    sll $t0, $s2, 2
+    add $t0, $s0, $t0
+    lw $a0, 0($t0)
+    jal imprimir_entero
+    addi $a0, $zero, ' '
+    jal imprimir_caracter
+    addi $s2, $s2, 1
+    j imprime_arreglo.bucle
+imprime_arreglo.fin:
+    orh $a0, $zero, .hi16 msg_nl
+    ori $a0, $a0, .lo16 msg_nl
+    jal imprimir_asciiz
+    lw $ra, 0($sp)
+    lw $s0, 4($sp)
+    lw $s1, 8($sp)
+    lw $s2, 12($sp)
+    addi $sp, $sp, 16
+    jr $ra, 0
+
+// ordena_burbuja($a0 = puntero, $a1 = largo).
+// Bubble sort con comparacion signada (slt).
+// Guarda $s0-$s3; $t0-$t5 para el cuerpo interno; $aX libres tras el prologo.
+ordena_burbuja:
+    addi $sp, $sp, -16
+    sw $s0, 0($sp)
+    sw $s1, 4($sp)
+    sw $s2, 8($sp)
+    sw $s3, 12($sp)
+    add $s0, $a0, $zero
+    addi $s1, $a1, -1
+    addi $s2, $zero, 0
+ordena_burbuja.bucle_i:
+    slt $t0, $s2, $s1
+    beq $t0, $zero, ordena_burbuja.fin
+    sub $s3, $s1, $s2
+    addi $t1, $zero, 0
+ordena_burbuja.bucle_j:
+    slt $t0, $t1, $s3
+    beq $t0, $zero, ordena_burbuja.siguiente_i
+    sll $t2, $t1, 2
+    add $t2, $s0, $t2
+    lw $t3, 0($t2)
+    addi $t4, $t2, 4
+    lw $t5, 0($t4)
+    slt $t0, $t5, $t3
+    beq $t0, $zero, ordena_burbuja.sin_swap
+    sw $t3, 0($t4)
+    sw $t5, 0($t2)
+ordena_burbuja.sin_swap:
+    addi $t1, $t1, 1
+    j ordena_burbuja.bucle_j
+ordena_burbuja.siguiente_i:
+    addi $s2, $s2, 1
+    j ordena_burbuja.bucle_i
+ordena_burbuja.fin:
+    lw $s0, 0($sp)
+    lw $s1, 4($sp)
+    lw $s2, 8($sp)
+    lw $s3, 12($sp)
+    addi $sp, $sp, 16
+    jr $ra, 0
+
+.section ".data"
+msg_antes: .asciiz "Antes:\r\n"
+msg_despues: .asciiz "Despues:\r\n"
+msg_fin: .asciiz "Fin.\r\n"
+msg_nl: .asciiz "\r\n"
+arreglo: .word 34 -7 23 32 5 -12 62 0 9 1
