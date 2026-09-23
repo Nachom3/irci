@@ -343,9 +343,10 @@ def _directive_size(
     if name in (".text", ".data", ".section"):
         return 0
     if name == ".word":
-        return (-offset) % 4 + 4 * len(_split_values(args))
+        # The first pass pre-aligns the cursor, so no padding is left here.
+        return 4 * len(_split_values(args))
     if name == ".short":
-        return (-offset) % 2 + 2 * len(_split_values(args))
+        return 2 * len(_split_values(args))
     if name == ".byte":
         return len(_split_values(args))
     if name == ".asciiz":
@@ -353,7 +354,7 @@ def _directive_size(
     if name == ".pad":
         return _parse_pad(args, offset)
     if name in (".ptr", ".lo16", ".hi16"):
-        return (-offset) % 4 + 4
+        return 4
     raise ValueError(f"unsupported directive {name}")
 
 
@@ -363,24 +364,41 @@ def _iter_source_entries(source: str) -> Iterable[tuple[int, list[str], str]]:
         yield line_number, labels, statement
 
 
+def _data_alignment(statement: str) -> int:
+    """Byte alignment required by a data directive (1 when it needs none)."""
+
+    name = statement.partition(" ")[0].lower()
+    if name in (".word", ".ptr", ".lo16", ".hi16"):
+        return 4
+    if name == ".short":
+        return 2
+    return 1
+
+
 def _first_pass(
     source: str,
 ) -> tuple[dict[str, int], list[tuple[int, str, str, int]], int, int]:
     labels_by_section: dict[str, int] = {}
     entries: list[tuple[int, str, str, int]] = []
+    pending: list[tuple[str, int]] = []
     section = "text"
     text_offset = 0
     data_offset = 0
 
-    for line_number, source_labels, statement in _iter_source_entries(source):
-        for label in source_labels:
-            if label in labels_by_section:
-                raise ValueError(f"duplicate label {label!r} on line {line_number}")
+    def flush_labels(offset: int) -> None:
+        for name, _line_number in pending:
             # Temporarily store section-relative offsets. They become absolute
             # after the text size is known.
-            labels_by_section[label] = (0 if section == "text" else 1) << 31 | (
-                text_offset if section == "text" else data_offset
-            )
+            labels_by_section[name] = (0 if section == "text" else 1) << 31 | offset
+        pending.clear()
+
+    for line_number, source_labels, statement in _iter_source_entries(source):
+        for label in source_labels:
+            if label in labels_by_section or any(
+                name == label for name, _ in pending
+            ):
+                raise ValueError(f"duplicate label {label!r} on line {line_number}")
+            pending.append((label, line_number))
         if not statement:
             continue
         if statement.startswith("."):
@@ -400,6 +418,14 @@ def _first_pass(
                     )
                 section = "text" if requested in ("text", ".text") else "data"
                 continue
+            if section == "text":
+                offset = text_offset
+            else:
+                # Aligning directives pad the cursor first, so labels point
+                # at the aligned words the encoder actually writes.
+                data_offset += (-data_offset) % _data_alignment(statement)
+                offset = data_offset
+            flush_labels(offset)
             size = _directive_size(
                 statement,
                 section,
@@ -411,7 +437,7 @@ def _first_pass(
                     line_number,
                     section,
                     statement,
-                    text_offset if section == "text" else data_offset,
+                    offset,
                 )
             )
             if section == "text":
@@ -419,18 +445,20 @@ def _first_pass(
             else:
                 data_offset += size
         else:
+            if section != "text":
+                raise ValueError(f"instruction outside .text on line {line_number}")
+            flush_labels(text_offset)
             entries.append(
                 (
                     line_number,
                     section,
                     statement,
-                    text_offset if section == "text" else data_offset,
+                    text_offset,
                 )
             )
-            if section == "text":
-                text_offset += 4
-            else:
-                raise ValueError(f"instruction outside .text on line {line_number}")
+            text_offset += 4
+
+    flush_labels(text_offset if section == "text" else data_offset)
 
     data_base = (text_offset + 3) & ~3
     labels: dict[str, int] = {}
@@ -545,6 +573,22 @@ def _encode_instruction(statement: str, pc: int, labels: dict[str, int]) -> int:
             "sltu": FUNC_SLTU,
             "add": FUNC_ADD,
             "sub": FUNC_SUB,
+        }[name]
+        return encode_r(
+            func,
+            rs=_parse_register(args[1]),
+            rt=_parse_register(args[2]),
+            rd=_parse_register(args[0]),
+        )
+    if name in ("mul", "mulh", "mulhu", "div", "divu", "rest", "restu"):
+        func = {
+            "mul": FUNC_MUL,
+            "mulh": FUNC_MULH,
+            "mulhu": FUNC_MULHU,
+            "div": FUNC_DIV,
+            "divu": FUNC_DIVU,
+            "rest": FUNC_REST,
+            "restu": FUNC_RESTU,
         }[name]
         return encode_r(
             func,
